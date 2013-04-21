@@ -1,0 +1,17 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="main">icons/client.ico</file>
+        <file alias="decrypt_icon">icons/decrypt.ico</file>
+        <file alias="decrypt">icons/decrypt.png</file>
+        <file alias="decrypt_disabled">icons/decrypt_disabled.png</file>
+        <file alias="stop">icons/media_playback_stop.png</file>
+        <file alias="pause">icons/media_playback_pause.png</file>
+        <file alias="remove">icons/remove_small.png</file>
+        <file alias="download-folder-icon">icons/download-folder-icon.png</file>
+        <file alias="folder-upload-icon">icons/folder-upload-icon.png</file>
+        <file alias="exit-icon">icons/exit-icon.png</file>
+        <file alias="help-about-icon">icons/help-about-icon.png</file>
+        <file alias="edit-remove-icon">icons/edit-remove-icon.png</file>
+        <file>icons/system-help.png</file>
+    </qresource>
+</RCC>

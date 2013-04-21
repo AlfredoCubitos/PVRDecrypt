@@ -1,0 +1,330 @@
+#include "qdrmdecryptthread.h"
+#include "aes.c"
+#include "mdb.h"
+
+#include <sys/stat.h>
+#include <QDebug>
+#include <QFile>
+
+QDRMDecryptThread::QDRMDecryptThread(QObject *parent) :
+    QThread(parent)
+{
+    closeThread=false;
+}
+
+void QDRMDecryptThread::run()
+{
+    errorString.clear();
+    closeThread=false;
+    try{
+        int i = 0;
+        while (!closeThread && i < decryptTasks.count()) {
+//            qApp->processEvents();
+            stepNextProcess(i);
+            ++i;
+        }
+        if (!errorString.isEmpty()) return;
+        emit finished( !closeThread );
+    }catch(int){
+        throw;
+    }
+}
+
+void QDRMDecryptThread::stop()
+{
+    closeThread=true;
+ }
+
+void QDRMDecryptThread::stepNextProcess(int index)
+{
+    emit processingIndex(index);
+//    MainWindow *parentWindow;
+//    parentWindow = qobject_cast<MainWindow *>(this->parent());
+
+//    QString tempOutFileName = "";
+
+//    for (int i = 0; i < 5; ++i) {
+//        if (parentWindow->tableWidget->item(0,i+2)->checkState() == Qt::Checked) {
+//            if (!tempOutFileName.isEmpty()) tempOutFileName += " - ";
+//            tempOutFileName += decryptTasks[index].fields.at(i);
+//        }
+//    }
+
+//    if (tempOutFileName.isEmpty()) {
+//        tempOutFileName = decryptTasks[index].fields.at(0) + " - " + decryptTasks[index].fields.at(1);
+//    }
+
+//    parentWindow->tableWidget->selectRow(index+1);
+    setInputFolder(decryptTasks[index].sourceFolder);
+    setInputFile( decryptTasks[index].inFileName );
+    setMdbFile( decryptTasks[index].mdbFileName );
+    setOutputFile( decryptTasks[index].genFileName );
+    if (!mainProcess()) {
+        closeThread = true;
+        if (!errorString.isEmpty()) errorString += "\n";
+        errorString += decryptTasks[index].inFileName+" coverting failed!";
+        emit error(errorString);
+    }
+}
+
+void QDRMDecryptThread::createDRMKey()  //for later use
+{
+    /*    unsigned char result[0x10];
+    int j;
+
+    for (j = 0; j < 0x10; j++)
+    {
+        outputDRMKey[(j & 0x0C) + (3 - (j & 0x03))] = inputDRMKey[j];
+    }
+*/
+}
+
+void QDRMDecryptThread::getDRMFromMDB(char *file)
+{
+    FILE *outputfp;
+    int j;
+
+    if ((outputfp = fopen(file, "rb")) != NULL) {
+        fseek(outputfp, 8, SEEK_SET);
+
+        for (j = 0; j<0x10; j++) {
+            fread(&outputDRMKey[(j & 0x0C) + (3 - (j & 0x03))], sizeof(unsigned char), 1, outputfp);
+        }
+        qDebug() << "Key: " << outputDRMKey;
+        fclose(outputfp);
+    } else {
+        if (!errorString.isEmpty()) errorString += "\n";
+        errorString += "Cannot open" + QString(file) + " key file";
+        return;
+    }
+}
+
+bool QDRMDecryptThread::process_section (unsigned char *data , unsigned char *outdata)
+{
+    unsigned char iv[0x10];
+    unsigned char *inbuf;
+//    unsigned int i, n;
+    unsigned char *outbuf;
+
+    memcpy(outdata, data, 188);
+    if((data[3]&0xC0)==0xC0)
+    {
+        //qDebug() << "Odd Key...";
+    }
+    else if((data[3]&0xC0)==0x80)
+    {
+        //qDebug() << "EvenKey...";
+    }
+    else
+    {
+        return false;
+    }
+
+    int offset=4;
+    if(data[3]&0x20)
+        offset += (data[4] +1);      // skip adaption field
+    outdata[3]&=0x3f;                 // remove scrambling bits
+    inbuf  = data + offset;
+    outbuf = outdata + offset;
+
+    int rounds = (188 - offset) / 0x10;
+    // AES CBC
+    memset(iv, 0, 16);
+    for (int i =  0; i <rounds; i++) {
+        unsigned char *out = outbuf + i* 0x10;
+        for(int n = 0; n < 16; n++) out[n] ^= iv[n];
+        aes_decrypt_128(inbuf + i* 0x10, outbuf + i * 0x10, outputDRMKey);
+        memcpy(iv, inbuf + i * 0x10, 16);
+    }
+    return true;
+}
+
+int file_exists (char * fileName)
+{
+    struct stat buf;
+    int i = stat ( fileName, &buf );
+    /* File found */
+    if ( i == 0 )
+    {
+        return 1;
+    }
+    return 0;
+}
+
+bool QDRMDecryptThread::mainProcess()
+{
+    FILE *inputfp,*outputfp;
+    int  sync_find=0;
+    unsigned long filesize = 0, i , j, dec_count = 0;
+    unsigned char buf[1024];
+    unsigned char outdata[1024];
+
+
+    QByteArray mdbFileBA = QString(m_inputfolder+"/"+m_mdbfile).toLocal8Bit();
+    QByteArray infileBA = QString(m_inputfolder+"/"+m_inputfile).toLocal8Bit();
+    QByteArray outfileBA = QString(m_outputfolder + "/" + m_outputfile + ".ts").toLocal8Bit();
+
+    char* mdbfile = mdbFileBA.data();
+    char* infile = infileBA.data();
+    char* outfile = outfileBA.data();
+
+    if((inputfp = fopen( mdbfile, "rb")) == NULL){
+        if (!errorString.isEmpty()) errorString += "\n";
+        errorString += "Cannot open " + QString(mdbfile) + " mdb file!";
+        return false;
+    }
+
+    fread(inputDRMKey, sizeof(unsigned char), 0x10, inputfp);
+    fclose(inputfp);
+
+    qDebug() << inputDRMKey;
+
+
+/*
+    QFile srfFile(infile);
+qDebug() <<  infile;
+    if(! srfFile.open(QIODevice::ReadOnly | QIODevice::Unbuffered))
+    {
+        qDebug() <<  "Cannot open" << infile;
+        errorString += "\n";
+        errorString += "Cannot open " + QString(infile) + " srf file!";
+        return false;
+    }
+qDebug() <<  " open" << infile;
+    inputfp = srfFile.handle();
+*/
+
+   if((inputfp = fopen64(infile, "rb")) == NULL){
+        if (!errorString.isEmpty()) errorString += "\n";
+        errorString += "Cannot open " + QString(infile) + " srf file!";
+        return false;
+    }
+
+
+
+    QString tempOutFileName = m_outputfile;
+    int fileIndex = 1;
+    while (file_exists(outfile) == 1) {
+        fileIndex++;
+        m_outputfile = tempOutFileName + " part" + QString::number(fileIndex);
+        outfileBA = QString(m_outputfolder + "/" + m_outputfile + ".ts").toLocal8Bit();
+        outfile = outfileBA.data();
+    }
+
+
+    if((outputfp = fopen64( outfile, "wb")) == NULL){
+        if (!errorString.isEmpty()) errorString += "\n";
+        errorString += "Cannot open " + QString(outfile) + " ts file!";
+        return false;
+    }
+
+
+/*    QFile tsFile(outfile);
+
+    if(! tsFile.open(QIODevice::WriteOnly))
+    {
+        errorString += "\n";
+        errorString += "Cannot open " + QString(outfile) + " ts file!";
+        return false;
+    }
+    QDataStream tsOut(&tsFile);
+*/
+   // getDRMFromMDB(mdbfile);
+
+    QByteArray 
+
+
+    fseek64(inputfp,0,2);
+    filesize=ftell64 (inputfp);
+    rewind(inputfp);
+    emit maximuxValue(filesize);
+
+    fread(buf, sizeof(unsigned char), 1024, inputfp);
+
+    for(i=0; i<(1024 - 188); i++){
+        if (buf[i] == 0x47 && buf[i+188] == 0x47 && buf[i+188+188] == 0x47){
+            sync_find = 1;
+            fseek(inputfp,i,SEEK_SET);
+            break;
+        }
+    }
+
+    if (sync_find) {
+        for(i=0;i<filesize;i+=188) {
+            if (closeThread) break;
+            fread(buf, sizeof(unsigned char), 188, inputfp);
+            if (buf[0] != 0x47)  {
+//                qDebug() << "lost synk" << i;
+                fseek64(inputfp,i,SEEK_SET);
+                sync_find = 0;
+                while (sync_find == 0) {
+                    fread(buf, sizeof(unsigned char), 1024, inputfp);
+                    for(j=0; j<(1024 - 188); j++){
+                        if (buf[j] == 0x47 && buf[j+188] == 0x47 && buf[j+188+188] == 0x47){
+                            sync_find = 1;
+                            fseek64(inputfp,i+j,SEEK_SET);
+                            break;
+                        }
+                    }
+                    i+=1024;
+                }
+            }else{
+                dec_count += 188;
+
+                process_section (buf , outdata);
+                fwrite(outdata,sizeof(unsigned char),188, outputfp);
+
+            }
+
+            if (i % 7440 == 0) {
+                emit valueChanged(dec_count);
+            }
+        }
+    }
+    if (!closeThread) emit valueChanged(filesize);
+    fclose(inputfp);
+    fclose(outputfp);
+//    qDebug() << "drmdecrypt successfull done," << dec_count << "bytes of" << filesize << "decrypted ...!";
+
+    return true;
+}
+
+void QDRMDecryptThread::setMdbFile(const QString value)
+{
+    m_mdbfile = value;
+}
+
+QString QDRMDecryptThread::mdbFile() const
+{
+    return m_mdbfile;
+}
+
+void QDRMDecryptThread::setOutputFile(const QString value)
+{
+    m_outputfile = value;
+}
+
+QString QDRMDecryptThread::outputFile() const
+{
+    return m_outputfile;
+}
+
+void QDRMDecryptThread::setInputFile(const QString value)
+{
+    m_inputfile = value;
+}
+
+QString QDRMDecryptThread::inputFile() const
+{
+    return m_inputfile;
+}
+
+void QDRMDecryptThread::setOutputFolder(const QString value)
+{
+    m_outputfolder = value;
+}
+
+void QDRMDecryptThread::setInputFolder(const QString value)
+{
+    m_inputfolder = value;
+}
