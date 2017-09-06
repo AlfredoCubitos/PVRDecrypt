@@ -4,8 +4,8 @@
 #
 #-------------------------------------------------
 
-QT       += core gui
-QT       += xml crypto
+QT       += widgets core gui
+QT       += xml
 
 TEMPLATE = app
 TARGET = PVRDecrypt
